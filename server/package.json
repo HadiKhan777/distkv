@@ -1,0 +1,12 @@
+{
+  "name": "distkv-server",
+  "version": "0.1.0",
+  "description": "Distributed key-value store — pure Node.js, zero dependencies",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start":   "node index.js",
+    "primary": "PORT=7379 METRICS_PORT=7380 REPL_PORT=7381 node index.js",
+    "replica": "PORT=7389 METRICS_PORT=7390 ROLE=replica PRIMARY_HOST=127.0.0.1 REPL_PORT=7381 node index.js"
+  }
+}

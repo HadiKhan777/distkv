@@ -1,0 +1,9 @@
+node_modules/
+dist/
+
+# WAL data — local state, not part of the repo
+server/data/
+server/data-replica/
+
+# Benchmark scratch files
+server/bench_read.js
