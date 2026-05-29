@@ -1,5 +1,7 @@
 # DistKV
 
+[hadikhan777.github.io/portfolio](https://hadikhan777.github.io/portfolio/)
+
 Distributed key-value store built from scratch in Node.js — no server-side dependencies.
 
 Implements the core of a production KV store: custom TCP protocol, write-ahead log, replication, and a browser dashboard.
