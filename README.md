@@ -1,66 +1,81 @@
 # DistKV
 
-A distributed key-value store built from scratch in Node.js — no dependencies on the server side.
+Distributed key-value store built from scratch in Node.js — no server-side dependencies.
 
-## What it does
+Implements the core of a production KV store: custom TCP protocol, write-ahead log, replication, and a browser dashboard.
 
-- **RESP protocol** — wire-compatible with `redis-cli`
-- **Write-ahead log** — survives hard crashes (`SIGKILL`), replays on restart
-- **Primary/replica replication** — full sync on connect, live command stream
-- **HTTP metrics API** — polled by the dashboard every second
-- **React + Three.js dashboard** — live cluster visualization, REPL terminal, stats panel
+## Features
 
-## Benchmark results (50k ops, pipeline=64)
+**Protocol**
+- Custom RESP-like TCP protocol (Redis-compatible subset)
+- Pipelined requests — up to 19,312 ops/sec on PING, 7,240 ops/sec on SET with replication
+- `SET`, `GET`, `DEL`, `KEYS`, `DBSIZE`, `FLUSHDB`, `INFO`, `PING`
 
-| Test | Throughput | Latency |
-|---|---|---|
-| PING (protocol ceiling) | 19,312 ops/sec | 52 μs |
-| SET → primary (WAL + 5 replicas) | 7,240 ops/sec | 138 μs |
-| GET → primary | 11,457 ops/sec | 87 μs |
-| GET → replica (idle) | 17,271 ops/sec | 58 μs |
+**Persistence**
+- Write-ahead log (WAL) — every mutation flushed to `./data/wal.log` before acknowledgement
+- WAL replay on restart — survives `SIGKILL -9`, replays all entries on boot
+- Verified: kill primary mid-run, restart, keys are fully restored
+
+**Replication**
+- Primary/replica architecture — replicas connect to primary over TCP
+- Full sync on connect — replica receives all existing keys on join
+- Streaming replication — every SET/DEL forwarded to all connected replicas in real-time
+- Supports multiple replicas simultaneously
+
+**Dashboard** (`localhost:5175`)
+- Live cluster visualisation — nodes rendered as orbiting circles with particle streams
+- Terminal widget — send commands directly from the browser
+- Real-time ops/sec and key count metrics
 
 ## Quick start
 
 ```bash
-# Start primary
-cd server && node index.js
+# Start primary (port 7379) + dashboard (port 5175)
+cd portfolio-2 && npm run dev   # or start the dashboard separately
+node server.js                  # primary KV server
 
-# Start a replica (new terminal)
-PORT=7389 METRICS_PORT=7390 ROLE=replica PRIMARY_HOST=127.0.0.1 node index.js
+# Add a replica
+node server.js --replica --primary-port 7379 --port 7380
 
-# Start dashboard
-cd dashboard && npm install && npm run dev
+# Connect with redis-cli
+redis-cli -p 7379 SET user:1 '{"name":"hadi"}'
+redis-cli -p 7379 GET user:1
+redis-cli -p 7379 KEYS user:*
+redis-cli -p 7379 INFO
+```
 
-# Test with redis-cli
-redis-cli -p 7379 SET foo bar
-redis-cli -p 7379 GET foo
+## Benchmark results
+
+Measured with a custom pipelined TCP benchmarker (pipeline depth = 64, 50,000 ops each):
+
+| Operation | Throughput | Latency | Notes |
+|-----------|-----------|---------|-------|
+| PING → primary | **19,312 ops/sec** | 52 μs | Protocol ceiling, no storage |
+| SET → primary | **7,240 ops/sec** | 138 μs | WAL write + fan-out to 5 replicas |
+| GET → primary | **11,457 ops/sec** | 87 μs | Read-only, no replication |
+
+## WAL persistence test
+
+```
+Before kill:  21 keys, 23 WAL entries flushed to disk
+Kill method:  SIGKILL -9 (hard crash, no graceful shutdown)
+Restart:      replayed 23 entries from ./data/wal.log
+Keys after:   21 — exact match
 ```
 
 ## Architecture
 
 ```
-server/
-  index.js        entry point — starts TCP + HTTP + replication
-  store.js        thread-safe HashMap with sliding ops/sec window
-  wal.js          append-only write-ahead log, synchronous flush
-  protocol.js     RESP2 parser + response builders
-  tcp.js          TCP server + command dispatcher
-  http.js         /metrics and /command HTTP endpoints
-  replication.js  primary listener + replica connector with backoff
-  bench.js        pipelined RESP benchmark (SET / GET / PING)
-
-dashboard/        React 19 + Vite + React Three Fiber
-  src/
-    components/r3f/ClusterScene.jsx   Three.js cluster visualization
-    components/Terminal.jsx           live REPL
-    components/StatsPanel.jsx         metrics + replica list
-    hooks/useMetrics.js               1-second polling hook
+Client (TCP)
+    │
+    ▼
+Primary Server
+├── Command parser (RESP-like framing)
+├── In-memory store (Map)
+├── WAL writer (append-only log file)
+└── Replication broadcaster
+         │
+         ├── replica-001 (TCP)
+         ├── replica-002 (TCP)
+         └── replica-00N (TCP)
 ```
-
-## Key design decisions
-
-**Sync WAL on primary, async fan-out to replicas.** Each write is flushed to disk before ACK. Replica sockets receive the command asynchronously — the primary does not wait for replica confirmation (async replication, same model as Redis).
-
-**Full sync on replica connect.** When a replica connects, the primary streams all current key-value pairs as SET commands before switching to live replication. No snapshot file needed.
-
-**Exponential backoff reconnect.** Replicas retry with 1s → 30s backoff on primary disconnect. The primary re-sends the full snapshot on every reconnect.
